@@ -38,7 +38,11 @@ type OSSConfig struct {
 	Bucket          string
 	AccessKeyID     string
 	AccessKeySecret string
+	SecurityToken   string
 	BasePath        string
+	CDNDomain       string
+	RoleSessionName string
+	RoleARN         string
 	URLExpireDays   int
 }
 
@@ -120,6 +124,9 @@ func loadConfigFromEnv() (Config, error) {
 			AccessKeyID:     envString("OSS_ACCESS_KEY_ID", ""),
 			AccessKeySecret: envString("OSS_ACCESS_KEY_SECRET", ""),
 			BasePath:        envString("OSS_BASE_PATH", "exports"),
+			CDNDomain:       envString("OSS_CDN_DOMAIN", ""),
+			RoleSessionName: envString("OSS_ROLE_SESSION_NAME", ""),
+			RoleARN:         envString("OSS_ROLE_ARN", ""),
 			URLExpireDays:   envInt("OSS_URL_EXPIRE_DAYS", 7),
 		},
 		UseMemoryWhenNoDB: envBool("EXPORT_USE_MEMORY_WHEN_NO_DB", true),
