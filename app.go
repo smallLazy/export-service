@@ -11,30 +11,36 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"export-service/internal/bootstrap"
+	configpkg "export-service/internal/config"
+	exportpkg "export-service/internal/export"
+	"export-service/internal/exporters/memberorder"
+	taskpkg "export-service/internal/task"
 )
 
 const (
 	dateLayout        = "2006-01-02"
 	timeLayout        = "2006-01-02 15:04:05"
-	exportMemberOrder = "member_order"
+	exportMemberOrder = memberorder.ExportType
 )
 
 type App struct {
-	registry     *ExportRegistry
+	registry     *exportpkg.ExportRegistry
 	source       string
 	exportSem    chan struct{}
-	taskManager  *TaskManager
+	taskManager  *taskpkg.TaskManager
+	executor     *exportpkg.ExportExecutor
 	maxRetries   int
 	queryTimeout time.Duration
 }
 
-func newApp(runtime *Runtime, maxConcurrency, maxRetries int, queryTimeout time.Duration) *App {
-	registry := newExportRegistry()
-	registry.Register(&MemberOrderExporter{repo: runtime.MemberOrders})
+func newApp(runtime *bootstrap.Runtime, maxConcurrency, maxRetries int, queryTimeout time.Duration) *App {
 	app := &App{
-		registry:     registry,
+		registry:     runtime.Registry,
 		source:       runtime.SourceName,
-		taskManager:  newTaskManager(runtime.OutputDir, runtime.TaskStore, runtime.OSSUploader, runtime.CallbackClient, runtime.OSSMaxRetries, runtime.OSSExpireDays),
+		taskManager:  runtime.TaskManager,
+		executor:     runtime.Executor,
 		maxRetries:   maxRetries,
 		queryTimeout: queryTimeout,
 	}
@@ -44,7 +50,7 @@ func newApp(runtime *Runtime, maxConcurrency, maxRetries int, queryTimeout time.
 	return app
 }
 
-func (a *App) routes(cfg Config) http.Handler {
+func (a *App) routes(cfg configpkg.Config) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -133,9 +139,9 @@ func (a *App) legacyMemberOrderExport(w http.ResponseWriter, r *http.Request) {
 	a.handleSubmitExport(w, r, exporter, exportFilters, meta)
 }
 
-func (a *App) handleSubmitExport(w http.ResponseWriter, r *http.Request, exporter Exporter, filters url.Values, meta TaskMetadata) {
-	if task, ok := a.taskManager.find(exporter.Type(), filters, meta); ok {
-		writeJSON(w, http.StatusAccepted, task.snapshot())
+func (a *App) handleSubmitExport(w http.ResponseWriter, r *http.Request, exporter exportpkg.Exporter, filters url.Values, meta taskpkg.TaskMetadata) {
+	if task, ok := a.taskManager.Find(exporter.Type(), filters, meta); ok {
+		writeJSON(w, http.StatusAccepted, task.Snapshot())
 		return
 	}
 
@@ -145,7 +151,7 @@ func (a *App) handleSubmitExport(w http.ResponseWriter, r *http.Request, exporte
 		return
 	}
 
-	task, isNew, err := a.taskManager.submit(exporter.Type(), filters, meta, a.maxRetries)
+	task, isNew, err := a.taskManager.Submit(exporter.Type(), filters, meta, a.maxRetries)
 	if err != nil {
 		release()
 		writeHTTPError(w, r, http.StatusInternalServerError, "failed to submit export task", err, "export_type", exporter.Type())
@@ -153,7 +159,7 @@ func (a *App) handleSubmitExport(w http.ResponseWriter, r *http.Request, exporte
 	}
 	if !isNew {
 		release()
-		writeJSON(w, http.StatusAccepted, task.snapshot())
+		writeJSON(w, http.StatusAccepted, task.Snapshot())
 		return
 	}
 
@@ -161,11 +167,9 @@ func (a *App) handleSubmitExport(w http.ResponseWriter, r *http.Request, exporte
 	go func() {
 		defer cancel()
 		defer release()
-		a.taskManager.execute(ctx, task, func(ctx context.Context) (int64, error) {
-			return exportCSVFile(ctx, task.OutputFile, exporter, filters)
-		})
+		a.executor.RunExport(ctx, task, exporter, filters)
 	}()
-	writeJSON(w, http.StatusAccepted, task.snapshot())
+	writeJSON(w, http.StatusAccepted, task.Snapshot())
 }
 
 func (a *App) handleTaskActions(w http.ResponseWriter, r *http.Request) {
@@ -183,14 +187,14 @@ func (a *App) handleTaskActions(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case action == "" && r.Method == http.MethodGet:
-		task, err := a.taskManager.get(taskID)
+		task, err := a.taskManager.Get(taskID)
 		if err != nil {
 			writeHTTPError(w, r, http.StatusNotFound, "export task not found", err, "task_id", taskID)
 			return
 		}
-		writeJSON(w, http.StatusOK, task.snapshot())
+		writeJSON(w, http.StatusOK, task.Snapshot())
 	case action == "retry" && r.Method == http.MethodPost:
-		existing, err := a.taskManager.get(taskID)
+		existing, err := a.taskManager.Get(taskID)
 		if err != nil {
 			writeHTTPError(w, r, http.StatusBadRequest, "export task not found", err, "task_id", taskID)
 			return
@@ -200,41 +204,40 @@ func (a *App) handleTaskActions(w http.ResponseWriter, r *http.Request) {
 			writeHTTPError(w, r, http.StatusInternalServerError, "failed to resolve export type", err, "task_id", taskID, "export_type", existing.Type)
 			return
 		}
+		stage := a.executor.RetryStage(existing, forceRebuild(r))
 		release, ok := a.tryAcquireExport(r.Context())
 		if !ok {
 			writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many concurrent exports"})
 			return
 		}
-		task, err := a.taskManager.retry(taskID)
+		task, err := a.taskManager.Retry(taskID, stage)
 		if err != nil {
 			release()
 			writeHTTPError(w, r, http.StatusBadRequest, "failed to retry export task", err, "task_id", taskID)
 			return
 		}
-		filters := task.filtersSnapshot()
+		filters := task.FiltersSnapshot()
 		ctx, cancel := context.WithTimeout(context.Background(), a.queryTimeout)
 		go func() {
 			defer cancel()
 			defer release()
-			a.taskManager.execute(ctx, task, func(ctx context.Context) (int64, error) {
-				return exportCSVFile(ctx, task.OutputFile, exporter, filters)
-			})
+			a.executor.Retry(ctx, task, exporter, filters, stage)
 		}()
-		writeJSON(w, http.StatusAccepted, task.snapshot())
+		writeJSON(w, http.StatusAccepted, task.Snapshot())
 	case action == "cancel" && r.Method == http.MethodPost:
-		task, err := a.taskManager.cancel(taskID)
+		task, err := a.taskManager.Cancel(taskID)
 		if err != nil {
 			writeHTTPError(w, r, http.StatusBadRequest, "failed to cancel export task", err, "task_id", taskID)
 			return
 		}
-		writeJSON(w, http.StatusOK, task.snapshot())
+		writeJSON(w, http.StatusOK, task.Snapshot())
 	case action == "download" && r.Method == http.MethodGet:
-		task, err := a.taskManager.get(taskID)
+		task, err := a.taskManager.Get(taskID)
 		if err != nil {
 			writeHTTPError(w, r, http.StatusNotFound, "export task not found", err, "task_id", taskID)
 			return
 		}
-		if task.State != TaskCompleted {
+		if task.State != taskpkg.TaskCompleted {
 			http.Error(w, fmt.Sprintf("task is %s, not completed", task.State), http.StatusBadRequest)
 			return
 		}
@@ -264,6 +267,11 @@ func previewLimit(r *http.Request) int {
 		return 20
 	}
 	return limit
+}
+
+func forceRebuild(r *http.Request) bool {
+	value := strings.TrimSpace(r.URL.Query().Get("force_rebuild"))
+	return value == "1" || strings.EqualFold(value, "true")
 }
 
 func defaultOutputPath(outputDir, exportType string) string {

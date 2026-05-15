@@ -1,4 +1,4 @@
-package main
+package memberorder
 
 import (
 	"context"
@@ -47,6 +47,16 @@ type MemberOrderRepository interface {
 	Stream(ctx context.Context, filters MemberOrderFilters, consumer func(MemberOrder) error) (int64, error)
 }
 
+type TableNames struct {
+	Orders            string
+	ViewUsers         string
+	OrderInstallments string
+	OrderItems        string
+	ViewServiceVIPs   string
+	MarketChannels    string
+	MarketLinks       string
+}
+
 type MemberOrderExporter struct {
 	repo MemberOrderRepository
 }
@@ -58,7 +68,7 @@ type MemoryMemberOrderRepository struct {
 type MySQLMemberOrderRepository struct {
 	db        *sql.DB
 	batchSize int
-	tables    tableNames
+	tables    TableNames
 }
 
 type orderCursor struct {
@@ -66,8 +76,22 @@ type orderCursor struct {
 	UUID string
 }
 
+const ExportType = "member_order"
+
+func NewExporter(repo MemberOrderRepository) *MemberOrderExporter {
+	return &MemberOrderExporter{repo: repo}
+}
+
+func NewMemoryRepository(size int) *MemoryMemberOrderRepository {
+	return &MemoryMemberOrderRepository{orders: seedMemberOrders(size)}
+}
+
+func NewMySQLRepository(db *sql.DB, batchSize int, tables TableNames) *MySQLMemberOrderRepository {
+	return &MySQLMemberOrderRepository{db: db, batchSize: batchSize, tables: tables}
+}
+
 func (e *MemberOrderExporter) Type() string {
-	return exportMemberOrder
+	return ExportType
 }
 
 func (e *MemberOrderExporter) Aliases() []string {
@@ -201,9 +225,9 @@ func (r *MySQLMemberOrderRepository) Stream(ctx context.Context, filters MemberO
 		return 0, err
 	}
 	startedAt := time.Now()
-	slog.Info("member order stream started", "export_type", exportMemberOrder, "status", "running", "batch_size", r.batchSize)
+	slog.Info("member order stream started", "export_type", ExportType, "status", "running", "batch_size", r.batchSize)
 	defer func() {
-		slog.Info("member order stream finished", "export_type", exportMemberOrder, "status", "finished", "batch_size", r.batchSize, "duration", time.Since(startedAt))
+		slog.Info("member order stream finished", "export_type", ExportType, "status", "finished", "batch_size", r.batchSize, "duration", time.Since(startedAt))
 	}()
 	if canUseOrderIDPage(filters) {
 		return r.streamByOrderIDPage(ctx, filters, timeField, startAt, endAt, consumer)

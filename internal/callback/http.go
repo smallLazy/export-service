@@ -1,4 +1,4 @@
-package main
+package callback
 
 import (
 	"bytes"
@@ -9,41 +9,24 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	exportpkg "export-service/internal/export"
+	taskpkg "export-service/internal/task"
 )
-
-type CallbackClient interface {
-	Notify(ctx context.Context, callbackURL string, payload ExportCallbackPayload) error
-}
-
-type ExportCallbackPayload struct {
-	TaskID       string    `json:"task_id"`
-	RequestID    string    `json:"request_id,omitempty"`
-	UserID       string    `json:"user_id,omitempty"`
-	CompanyUUID  string    `json:"company_uuid,omitempty"`
-	SourceSystem string    `json:"source_system,omitempty"`
-	ExportType   string    `json:"export_type"`
-	FileName     string    `json:"file_name,omitempty"`
-	Status       string    `json:"status"`
-	FileSize     int64     `json:"file_size,omitempty"`
-	OSSKey       string    `json:"oss_key,omitempty"`
-	OSSURL       string    `json:"oss_url,omitempty"`
-	ExpiredAt    time.Time `json:"expired_at,omitempty"`
-	ErrorMessage string    `json:"error_message,omitempty"`
-}
 
 type HTTPCallbackClient struct {
 	client  *http.Client
 	timeout time.Duration
 }
 
-func newCallbackClient() CallbackClient {
+func NewHTTPClient() exportpkg.CallbackClient {
 	return &HTTPCallbackClient{
 		client:  &http.Client{Timeout: 15 * time.Second},
 		timeout: 15 * time.Second,
 	}
 }
 
-func (c *HTTPCallbackClient) Notify(ctx context.Context, callbackURL string, payload ExportCallbackPayload) error {
+func (c *HTTPCallbackClient) Notify(ctx context.Context, callbackURL string, payload taskpkg.ExportCallbackPayload) error {
 	callbackURL = strings.TrimSpace(callbackURL)
 	if callbackURL == "" {
 		return nil

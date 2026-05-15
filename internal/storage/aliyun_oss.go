@@ -1,4 +1,4 @@
-package main
+package storage
 
 import (
 	"context"
@@ -13,17 +13,11 @@ import (
 	"path"
 	"strings"
 	"time"
+
+	configpkg "export-service/internal/config"
+	exportpkg "export-service/internal/export"
+	taskpkg "export-service/internal/task"
 )
-
-type OSSUploader interface {
-	Upload(ctx context.Context, localPath, exportType, taskID string, expiresAt time.Time) (OSSUploadResult, error)
-}
-
-type OSSUploadResult struct {
-	Key      string
-	URL      string
-	FileSize int64
-}
 
 type AliyunOSSUploader struct {
 	endpoint        string
@@ -36,7 +30,7 @@ type AliyunOSSUploader struct {
 	client          *http.Client
 }
 
-func newOSSUploader(cfg OSSConfig) OSSUploader {
+func NewAliyunOSSUploader(cfg configpkg.OSSConfig) exportpkg.Uploader {
 	if !cfg.Enabled() {
 		return nil
 	}
@@ -52,14 +46,14 @@ func newOSSUploader(cfg OSSConfig) OSSUploader {
 	}
 }
 
-func (u *AliyunOSSUploader) Upload(ctx context.Context, localPath, exportType, taskID string, expiresAt time.Time) (OSSUploadResult, error) {
+func (u *AliyunOSSUploader) Upload(ctx context.Context, localPath, exportType, taskID string, expiresAt time.Time) (taskpkg.OSSUploadResult, error) {
 	info, err := os.Stat(localPath)
 	if err != nil {
-		return OSSUploadResult{}, err
+		return taskpkg.OSSUploadResult{}, err
 	}
 	file, err := os.Open(localPath)
 	if err != nil {
-		return OSSUploadResult{}, err
+		return taskpkg.OSSUploadResult{}, err
 	}
 	defer file.Close()
 
@@ -68,7 +62,7 @@ func (u *AliyunOSSUploader) Upload(ctx context.Context, localPath, exportType, t
 	putURL := u.objectURL(key)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, putURL, file)
 	if err != nil {
-		return OSSUploadResult{}, err
+		return taskpkg.OSSUploadResult{}, err
 	}
 	req.ContentLength = info.Size()
 	req.Header.Set("Date", now.Format(http.TimeFormat))
@@ -80,15 +74,15 @@ func (u *AliyunOSSUploader) Upload(ctx context.Context, localPath, exportType, t
 
 	resp, err := u.client.Do(req)
 	if err != nil {
-		return OSSUploadResult{}, err
+		return taskpkg.OSSUploadResult{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return OSSUploadResult{}, fmt.Errorf("oss upload failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return taskpkg.OSSUploadResult{}, fmt.Errorf("oss upload failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	return OSSUploadResult{
+	return taskpkg.OSSUploadResult{
 		Key:      key,
 		URL:      u.signedURL(key, expiresAt),
 		FileSize: info.Size(),
@@ -96,7 +90,7 @@ func (u *AliyunOSSUploader) Upload(ctx context.Context, localPath, exportType, t
 }
 
 func (u *AliyunOSSUploader) objectKey(exportType, taskID string, now time.Time) string {
-	items := []string{u.basePath, normalizeExportType(exportType), now.Format("2006"), now.Format("01"), now.Format("02"), taskID + ".csv"}
+	items := []string{u.basePath, exportpkg.NormalizeType(exportType), now.Format("2006"), now.Format("01"), now.Format("02"), taskID + ".csv"}
 	parts := make([]string, 0, len(items))
 	for _, item := range items {
 		item = strings.Trim(item, "/")

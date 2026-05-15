@@ -9,6 +9,10 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"export-service/internal/bootstrap"
+	configpkg "export-service/internal/config"
+	"export-service/internal/writer"
 )
 
 func main() {
@@ -25,7 +29,7 @@ func main() {
 	flag.Var(&cliFilters, "filter", "export filter as key=value, repeatable. Example: -filter time_options=payment_at -filter time_keyword[]=2025-05-01")
 	flag.Parse()
 
-	if err := loadEnvFile(*envFile); err != nil {
+	if err := configpkg.LoadEnvFile(*envFile); err != nil {
 		log.Fatalf("load env failed: %v", err)
 	}
 
@@ -33,11 +37,11 @@ func main() {
 		_ = os.Setenv("APP_ENV", strings.TrimSpace(*envName))
 	}
 
-	cfg, err := loadConfigFromEnv()
+	cfg, err := configpkg.LoadFromEnv()
 	if err != nil {
 		log.Fatalf("load config failed: %v", err)
 	}
-	runtime, err := buildRuntime(cfg)
+	runtime, err := bootstrap.BuildRuntime(cfg)
 	if err != nil {
 		log.Fatalf("init runtime failed: %v", err)
 	}
@@ -66,7 +70,7 @@ func main() {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), queryTimeout)
 		defer cancel()
-		total, err := exportCSVFile(ctx, outputPath, exporter, filterValues)
+		total, err := writer.ExportCSVFile(ctx, outputPath, exporter, filterValues)
 		if err != nil {
 			log.Fatalf("export failed: %v", err)
 		}

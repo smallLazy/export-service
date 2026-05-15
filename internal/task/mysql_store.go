@@ -1,4 +1,4 @@
-package main
+package task
 
 import (
 	"context"
@@ -12,20 +12,20 @@ import (
 const exportTasksTable = "export_tasks"
 
 type TaskStore interface {
-	ensureSchema(ctx context.Context) error
-	load(ctx context.Context) ([]*Task, error)
-	save(ctx context.Context, row taskStoreRow) error
+	EnsureSchema(ctx context.Context) error
+	Load(ctx context.Context) ([]*Task, error)
+	Save(ctx context.Context, row taskStoreRow) error
 }
 
 type MySQLTaskStore struct {
 	db *sql.DB
 }
 
-func newMySQLTaskStore(db *sql.DB) *MySQLTaskStore {
+func NewMySQLStore(db *sql.DB) *MySQLTaskStore {
 	return &MySQLTaskStore{db: db}
 }
 
-func (s *MySQLTaskStore) ensureSchema(ctx context.Context) error {
+func (s *MySQLTaskStore) EnsureSchema(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS export_tasks (
   id VARCHAR(64) NOT NULL PRIMARY KEY,
@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS export_tasks (
 	return nil
 }
 
-func (s *MySQLTaskStore) load(ctx context.Context) ([]*Task, error) {
+func (s *MySQLTaskStore) Load(ctx context.Context) ([]*Task, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT id, export_type, filters_json, status, output_path, retry_count, max_retries,
        error_message, user_id, company_uuid, request_id, file_name, file_size,
@@ -194,13 +194,13 @@ FROM export_tasks`)
 		if err := json.Unmarshal(filtersJSON, &task.filters); err != nil {
 			return nil, fmt.Errorf("decode filters for task %s: %w", task.ID, err)
 		}
-		task.filters = cloneFilters(task.filters)
+		task.filters = CloneFilters(task.filters)
 		tasks = append(tasks, &task)
 	}
 	return tasks, rows.Err()
 }
 
-func (s *MySQLTaskStore) save(ctx context.Context, row taskStoreRow) error {
+func (s *MySQLTaskStore) Save(ctx context.Context, row taskStoreRow) error {
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO export_tasks (
   id, export_type, filters_json, status, output_path, retry_count, max_retries,
@@ -303,7 +303,7 @@ func (t *Task) storeRow() (taskStoreRow, error) {
 }
 
 func (t *Task) storeRowLocked() (taskStoreRow, error) {
-	filtersJSON, err := json.Marshal(cloneFilters(t.filters))
+	filtersJSON, err := json.Marshal(CloneFilters(t.filters))
 	if err != nil {
 		return taskStoreRow{}, err
 	}

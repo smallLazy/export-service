@@ -1,4 +1,4 @@
-package main
+package writer
 
 import (
 	"bufio"
@@ -11,7 +11,11 @@ import (
 	"path/filepath"
 )
 
-func exportCSVFile(ctx context.Context, path string, exporter Exporter, params url.Values) (total int64, err error) {
+type CSVStreamer interface {
+	StreamCSV(ctx context.Context, target io.Writer, params url.Values) (int64, error)
+}
+
+func ExportCSVFile(ctx context.Context, path string, exporter CSVStreamer, params url.Values) (total int64, err error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return 0, err
 	}
@@ -53,7 +57,7 @@ func exportCSVFile(ctx context.Context, path string, exporter Exporter, params u
 	return total, nil
 }
 
-func streamCSV(ctx context.Context, target io.Writer, header []string, stream func(context.Context, func([]string) error) (int64, error)) (int64, error) {
+func StreamCSV(ctx context.Context, target io.Writer, header []string, stream func(context.Context, func([]string) error) (int64, error)) (int64, error) {
 	buffered := bufio.NewWriterSize(target, 1024*1024)
 	if _, err := buffered.Write([]byte("\xEF\xBB\xBF")); err != nil {
 		return 0, err

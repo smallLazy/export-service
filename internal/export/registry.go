@@ -1,4 +1,4 @@
-package main
+package export
 
 import (
 	"context"
@@ -21,19 +21,19 @@ type ExportRegistry struct {
 	exporters map[string]Exporter
 }
 
-func newExportRegistry() *ExportRegistry {
+func NewRegistry() *ExportRegistry {
 	return &ExportRegistry{exporters: make(map[string]Exporter)}
 }
 
 func (r *ExportRegistry) Register(exporter Exporter) {
 	r.exporters[exporter.Type()] = exporter
 	for _, alias := range exporter.Aliases() {
-		r.exporters[normalizeExportType(alias)] = exporter
+		r.exporters[NormalizeType(alias)] = exporter
 	}
 }
 
 func (r *ExportRegistry) Resolve(exportType string) (Exporter, error) {
-	normalized := normalizeExportType(exportType)
+	normalized := NormalizeType(exportType)
 	exporter, ok := r.exporters[normalized]
 	if !ok {
 		return nil, fmt.Errorf("unsupported export type %q", exportType)
@@ -54,6 +54,6 @@ func (r *ExportRegistry) Types() []string {
 	return types
 }
 
-func normalizeExportType(exportType string) string {
+func NormalizeType(exportType string) string {
 	return strings.TrimSpace(strings.ToLower(strings.ReplaceAll(exportType, "-", "_")))
 }

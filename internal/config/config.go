@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"bufio"
@@ -24,13 +24,15 @@ type ServerConfig struct {
 }
 
 type ExportConfig struct {
-	OutputDir      string
-	QueryTimeout   string
-	MySQLBatchSize int
-	SeedSize       int
-	MaxConcurrency int
-	MaxRetries     int
-	OSSMaxRetries  int
+	OutputDir             string
+	QueryTimeout          string
+	MySQLBatchSize        int
+	SeedSize              int
+	MaxConcurrency        int
+	MaxRetries            int
+	OSSMaxRetries         int
+	CallbackMaxRetries    int
+	CallbackRetryInterval string
 }
 
 type OSSConfig struct {
@@ -61,7 +63,7 @@ type DatabaseConfig struct {
 	MaxIdleConns int
 }
 
-func loadEnvFile(path string) error {
+func LoadEnvFile(path string) error {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return nil
@@ -102,7 +104,7 @@ func loadEnvFile(path string) error {
 	return scanner.Err()
 }
 
-func loadConfigFromEnv() (Config, error) {
+func LoadFromEnv() (Config, error) {
 	appEnv := envString("APP_ENV", "local")
 	cfg := Config{
 		AppEnv: appEnv,
@@ -110,13 +112,15 @@ func loadConfigFromEnv() (Config, error) {
 			Addr: envString("APP_ADDR", ":8088"),
 		},
 		Export: ExportConfig{
-			OutputDir:      envString("EXPORT_OUTPUT_DIR", "./exports"),
-			QueryTimeout:   envString("EXPORT_QUERY_TIMEOUT", "5m"),
-			MySQLBatchSize: envInt("EXPORT_MYSQL_BATCH_SIZE", 1000),
-			SeedSize:       envInt("EXPORT_SEED_SIZE", 30000),
-			MaxConcurrency: envInt("EXPORT_MAX_CONCURRENCY", 3),
-			MaxRetries:     envInt("EXPORT_MAX_RETRIES", 2),
-			OSSMaxRetries:  envInt("EXPORT_OSS_MAX_RETRIES", 3),
+			OutputDir:             envString("EXPORT_OUTPUT_DIR", "./exports"),
+			QueryTimeout:          envString("EXPORT_QUERY_TIMEOUT", "5m"),
+			MySQLBatchSize:        envInt("EXPORT_MYSQL_BATCH_SIZE", 1000),
+			SeedSize:              envInt("EXPORT_SEED_SIZE", 30000),
+			MaxConcurrency:        envInt("EXPORT_MAX_CONCURRENCY", 3),
+			MaxRetries:            envInt("EXPORT_MAX_RETRIES", 2),
+			OSSMaxRetries:         envInt("EXPORT_OSS_MAX_RETRIES", 3),
+			CallbackMaxRetries:    envInt("CALLBACK_MAX_RETRIES", 3),
+			CallbackRetryInterval: envString("CALLBACK_RETRY_INTERVAL", "1m"),
 		},
 		OSS: OSSConfig{
 			Endpoint:        envString("OSS_ENDPOINT", ""),
@@ -175,6 +179,12 @@ func (c Config) Validate() error {
 	}
 	if c.Export.OSSMaxRetries < 0 {
 		return fmt.Errorf("EXPORT_OSS_MAX_RETRIES must be greater than or equal to 0")
+	}
+	if c.Export.CallbackMaxRetries < 0 {
+		return fmt.Errorf("CALLBACK_MAX_RETRIES must be greater than or equal to 0")
+	}
+	if strings.TrimSpace(c.Export.CallbackRetryInterval) == "" {
+		return fmt.Errorf("CALLBACK_RETRY_INTERVAL is required")
 	}
 	if c.OSS.Enabled() {
 		if strings.TrimSpace(c.OSS.Endpoint) == "" {
@@ -294,4 +304,20 @@ func envBool(key string, fallback bool) bool {
 		return fallback
 	}
 	return parsed
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func defaultInt(value, fallback int) int {
+	if value > 0 {
+		return value
+	}
+	return fallback
 }

@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	taskpkg "export-service/internal/task"
 )
 
 func filtersFromRequest(r *http.Request) url.Values {
@@ -17,9 +19,9 @@ func filtersFromRequest(r *http.Request) url.Values {
 	return values
 }
 
-func taskMetadataFromRequest(r *http.Request, filters url.Values) (TaskMetadata, url.Values) {
+func taskMetadataFromRequest(r *http.Request, filters url.Values) (taskpkg.TaskMetadata, url.Values) {
 	values := r.URL.Query()
-	meta := TaskMetadata{
+	meta := taskpkg.TaskMetadata{
 		UserID:       strings.TrimSpace(values.Get("user_id")),
 		CompanyUUID:  strings.TrimSpace(values.Get("company_uuid")),
 		RequestID:    strings.TrimSpace(values.Get("request_id")),
@@ -27,7 +29,7 @@ func taskMetadataFromRequest(r *http.Request, filters url.Values) (TaskMetadata,
 		CallbackURL:  strings.TrimSpace(values.Get("callback_url")),
 		SourceSystem: strings.TrimSpace(values.Get("source_system")),
 	}
-	exportFilters := cloneFilters(filters)
+	exportFilters := taskpkg.CloneFilters(filters)
 	for _, key := range []string{"user_id", "request_id", "file_name", "callback_url", "source_system"} {
 		delete(exportFilters, key)
 	}
